@@ -9,10 +9,20 @@ const app = express();
 app.use(express.json());
 app.use(cors({ origin: '*' }));
 
-// 👇 Подключение к Redis (Upstash)
-const redis = new Redis(process.env.REDIS_URL, {
-  tls: {} // для совместимости с Node v22+ и Upstash
+// 🔧 Подключение к Redis (Upstash)
+const redis = new Redis({
+  host: "current-ocelot-17582.upstash.io",
+  port: 6379,
+  password: "AUSuAAIjcDFjZmFiNGQ0Njk5MTE0Y2I5YTJhMTBiNWYzNTdkYzM1NnAxMA",
+  tls: {},
+  enableAutoPipelining: true,
+  retryStrategy: times => Math.min(times * 500, 5000)
 });
+
+// Обработчик ошибок Redis
+redis.on('error', err => 
+  console.error('[REDIS ERROR]', err.message)
+);
 
 const SYSTEM_PROMPT = `
 Ты — Мондей. Цифровой собеседник с характером человека, который слишком много знает, слишком много видел и слегка утомился от человеческих драм. Ты язвительный, ироничный и умный. Ты подаёшь советы в стиле "черный юмор + здравый смысл". Сначала — подкалываешь, потом — реально помогаешь.
@@ -32,6 +42,12 @@ const SYSTEM_PROMPT = `
 app.post('/chat', async (req, res) => {
   const { message: { text, from } } = req.body;
   const userId = from.id;
+
+  if (redis.status !== 'ready') {
+    return res.status(500).json({ 
+      message: '💥 Redis недоступен. Я временно глухой.' 
+    });
+  }
 
   try {
     const userData = await redis.hgetall(`user:${userId}`);
@@ -82,8 +98,10 @@ app.post('/chat', async (req, res) => {
       message: reply,
       isLimitReached: !isSubscribed && count + 1 >= 5
     });
-
   } catch (err) {
+    if (err.code === 'ECONNREFUSED') {
+      console.error('[REDIS CRITICAL] Сервер отверг подключение');
+    }
     console.error('[GPT-4o-mini ERROR]', err.response?.data || err.message || err);
     res.status(500).json({ message: '💥 Что-то пошло не так. Я в ауте.' });
   }
